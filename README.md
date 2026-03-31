@@ -123,17 +123,172 @@ conda create -n nextclade -c bioconda nextclade
 
 ## 3. Required input files
 
-These files must be present before running the pipeline. They are **not** included in the
-repository. Obtain them as described below.
+This section is intentionally detailed so a new user can start with many different input
+combinations and still reproduce Path C.
 
-| File | Location | How to obtain |
-|------|----------|---------------|
-| `BVBRC_genome.txt` | `H3N2_DATA/H3N2_DATA/` | BV-BRC website → H3N2 genome search → select all → Export → CSV/TSV with all metadata columns. Save as `BVBRC_genome.txt`. |
-| `genome_metadata_H3N2.tsv` | project root | `p3-all-genomes --eq taxon_id,11520 > genome_metadata_H3N2.tsv` (H3N2 taxon ID = 11520), or download via BV-BRC genome metadata export. |
-| `genome_metadata_H3N2_full.tsv` | project root | Same as above with all extra columns. Used as fallback lookup. |
-| `NEW_genome_w_clade.txt` | project root | Tab-delimited curation file: `genome_id \t host \t country_region \t year \t clade`. Source: internal curation or BV-BRC H3N2 clade export. |
-| `segment_{N}.clean.fasta` (N = 1–8) | `H3N2_DATA/H3N2_DATA/` | Path B output (strain-name-headed FASTA per segment). If unavailable, export per-segment FASTA from BV-BRC and run `clean_fasta_headers.py`. |
-| `config/config.yaml` | project root `config/` | Already in the repo under `inputs/config.yaml`. Copy to `config/config.yaml`. |
+### 3a. Files by importance (required vs optional)
+
+| File | Required? | Why it is needed |
+|------|-----------|------------------|
+| `segment_{N}.fasta` or `segment_{N}.clean.fasta` (N=1..8) | **Required** | Core sequence input for mapping strains and building trees. Raw FASTA can be cleaned in this pipeline. |
+| `BVBRC_genome.txt` | **Required** | Primary mapping source from strain names to `genome_id`; provides most metadata fields. |
+| `genome_metadata_H3N2.tsv` | **Strongly recommended** | Fallback mapping source when `BVBRC_genome.txt` misses a record. |
+| `genome_metadata_H3N2_full.tsv` | Optional | Extended fallback / audit reference. Not strictly required for a standard run. |
+| `NEW_genome_w_clade.txt` | Optional | Curated clade/host/location overlay. Pipeline runs without it. |
+| `config/config.yaml` | **Required** | Augur clock/refine and threading configuration. |
+| `H3N2_output/nextclade_pathc_segment4.tsv` and `nextclade_pathc_segment6.tsv` | Optional | Only needed if you want Nextclade-based clade/subclade overlays. |
+
+> If the user has **no Nextclade classifications**, the full Path C tree build still works.
+> Nextclade is an optional enrichment step, not a hard dependency.
+
+### 3b. Canonical location of files
+
+Place files in these paths before running commands:
+
+- `H3N2_DATA/H3N2_DATA/BVBRC_genome.txt`
+- `H3N2_DATA/H3N2_DATA/segment_1.fasta` ... `segment_8.fasta` (or already-cleaned versions)
+- `genome_metadata_H3N2.tsv` (project root)
+- `genome_metadata_H3N2_full.tsv` (project root, optional)
+- `NEW_genome_w_clade.txt` (project root, optional)
+- `config/config.yaml` (project root; copy from `inputs/config.yaml` if needed)
+
+### 3c. Start-from-any-input matrix (all common cases)
+
+Use the row that matches what the other user currently has.
+
+| Starting inputs available | What to run first | What gets generated |
+|---------------------------|------------------|---------------------|
+| **Case A:** `BVBRC_genome.txt` + raw `segment_N.fasta` only | Clean raw FASTA headers, then run Step 1 onward | `segment_N.clean.fasta`, `genome_ids_segmentN_pathc.txt`, `metadata_segmentN_pathc.tsv`, all downstream outputs |
+| **Case B:** `BVBRC_genome.txt` + `genome_metadata_H3N2.tsv` only (no segment FASTA) | Export per-segment FASTA from BV-BRC website first, then clean and continue | All FASTA + metadata + trees |
+| **Case C:** genome ID lists only (`genome_ids_segmentN_pathc.txt`) | Fetch FASTA by genome IDs, normalize, then build trees | segment FASTA, clean FASTA, metadata (if missing must run Step 1), trees |
+| **Case D:** cleaned FASTA exists but no metadata TSV | Run Step 1 to create Path C metadata and IDs, then continue | metadata TSVs, JSONs |
+| **Case E:** no Nextclade TSV/classification | Skip Step 6; run Steps 1-5 and 7-9 only | Fully working Path C outputs without Nextclade clade overlay |
+
+### 3d. Bootstrapping commands for each case
+
+#### Case A — User has `BVBRC_genome.txt` + raw `segment_N.fasta` only
+
+```bash
+cd /mnt/c/Users/sdeshmuk/Desktop/H3N2
+conda activate bvbrc
+
+# 1) Clean raw FASTA headers to make BV-BRC strain matching reliable
+for N in 1 2 3 4 5 6 7 8; do
+   python scripts/clean_fasta_headers.py \
+      H3N2_DATA/H3N2_DATA/segment_${N}.fasta \
+      H3N2_DATA/H3N2_DATA/segment_${N}.clean.fasta
+done
+
+# 2) (Recommended) create fallback genome metadata file
+p3-all-genomes --eq taxon_id,11520 > genome_metadata_H3N2.tsv
+
+# 3) Build Path C segments end-to-end
+python scripts/build_segment_pathc.py --all
+
+# 4) Enrich segment JSONs
+for N in 1 2 3 4 5 6 7 8; do
+   python scripts/tune_auspice_meta.py h3n2_segment${N}_pathc.json
+done
+
+# 5) Build concatenated tree + tune
+python scripts/build_pathc_concat.py
+python scripts/tune_auspice_meta.py h3n2_pathc_concat.json
+```
+
+#### Case B — User has metadata but no segment FASTA files
+
+1. Use BV-BRC website export for each segment 1-8 (`segment_N.fasta`).
+2. Run Case A commands from the header-cleaning step onward.
+
+#### Case C — User has genome ID lists only
+
+```bash
+cd /mnt/c/Users/sdeshmuk/Desktop/H3N2
+conda activate bvbrc
+
+# For each segment, fetch FASTA directly from genome IDs
+for N in 1 2 3 4 5 6 7 8; do
+   python scripts/fetch_fasta_by_genome_id.py $N \
+      --genome-list H3N2_DATA/H3N2_DATA/genome_ids_segment${N}_pathc.txt \
+      --output-suffix _pathc --workers 32
+done
+
+# If metadata_segmentN_pathc.tsv does not exist, generate it from cleaned/path B-like FASTA
+# by running extract script on segment_N.clean.fasta (requires those files available).
+for N in 1 2 3 4 5 6 7 8; do
+   python scripts/extract_genome_ids_from_path_c.py --segment $N
+done
+
+# Normalize headers and continue with build
+for N in 1 2 3 4 5 6 7 8; do
+   python scripts/ensure_fasta_headers_genome_id.py --suffix _pathc --segment $N
+done
+python scripts/build_segment_pathc.py --all
+```
+
+#### Case D — User has cleaned segment FASTA but no Path C metadata
+
+```bash
+cd /mnt/c/Users/sdeshmuk/Desktop/H3N2
+conda activate bvbrc
+
+for N in 1 2 3 4 5 6 7 8; do
+   python scripts/extract_genome_ids_from_path_c.py --segment $N
+done
+
+python scripts/build_segment_pathc.py --all
+for N in 1 2 3 4 5 6 7 8; do
+   python scripts/tune_auspice_meta.py h3n2_segment${N}_pathc.json
+done
+python scripts/build_pathc_concat.py
+python scripts/tune_auspice_meta.py h3n2_pathc_concat.json
+```
+
+#### Case E — No Nextclade classification available
+
+Run all steps except Step 6. You will still get:
+
+- `auspice/h3n2_segment1_pathc.json` ... `auspice/h3n2_segment8_pathc.json`
+- `auspice/h3n2_pathc_concat.json`
+
+Clade/subclade fields will come from BV-BRC/curated metadata instead of Nextclade.
+
+### 3e. How to generate optional Nextclade datasets from scratch
+
+If the user has no Nextclade TSV files and wants that overlay:
+
+```bash
+conda activate nextclade
+cd /mnt/c/Users/sdeshmuk/Desktop/H3N2
+
+# Download references once
+nextclade dataset get --name flu_h3n2_ha --output-dir nextclade_dataset_h3n2_ha
+nextclade dataset get --name flu_h3n2_na --output-dir nextclade_dataset_h3n2_na
+
+# Generate TSV for segment 4 (HA)
+nextclade run \
+   --input-dataset nextclade_dataset_h3n2_ha \
+   --output-all H3N2_output/ \
+   --output-basename nextclade_pathc_segment4 \
+   H3N2_DATA/H3N2_DATA/segment_4_h3n2_pathc.clean.fasta
+
+# Generate TSV for segment 6 (NA)
+nextclade run \
+   --input-dataset nextclade_dataset_h3n2_na \
+   --output-all H3N2_output/ \
+   --output-basename nextclade_pathc_segment6 \
+   H3N2_DATA/H3N2_DATA/segment_6_h3n2_pathc.clean.fasta
+```
+
+Then apply overlay:
+
+```bash
+conda activate bvbrc
+python scripts/add_nextclade_to_pathc.py --tsv H3N2_output/nextclade_pathc_segment4.tsv --segments 4
+python scripts/add_nextclade_to_pathc.py --tsv H3N2_output/nextclade_pathc_segment6.tsv --segments 6
+python scripts/tune_auspice_meta.py h3n2_segment4_pathc.json
+python scripts/tune_auspice_meta.py h3n2_segment6_pathc.json
+```
 
 ---
 
