@@ -1,0 +1,42 @@
+# -- Data files (large, not committed) --------------------------
+*.fasta
+*.tsv
+*.csv
+*.txt
+*.nwk
+*.json
+
+# -- Python cache ------------------------------------------------
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+
+# -- Conda / virtual env -----------------------------------------
+.conda/
+env/
+venv/
+.env
+
+# -- Nextclade datasets (downloaded at runtime) ------------------
+nextclade_dataset_*/
+
+# -- Build / results artifacts -----------------------------------
+results/
+H3N2_output/
+H3N2_DATA/
+
+# -- Auspice output JSONs (generated, viewable separately) -------
+auspice_output/
+workflow_outputs/
+
+# -- OS / editor noise -------------------------------------------
+.DS_Store
+Thumbs.db
+.vscode/
+*.swp
+*.swo
+
+# -- Exception: keep config.yaml ---------------------------------
+!inputs/config.yaml
